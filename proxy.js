@@ -13,6 +13,7 @@ const organizationRoutes = require("./routes/organizations")
 const analysisRoutes = require("./routes/analyses")
 const appointmentRoutes = require("./routes/appointments")
 const recommendationsRoutes = require("./routes/recommendations");
+const profileRoutes = require("./routes/profile")
 
 const app = express()
 const PORT = process.env.PORT || 3001
@@ -86,7 +87,7 @@ app.use("/api/organizations", organizationRoutes)
 app.use("/api/appointments", appointmentRoutes)
 app.use("/api/analyses", recommendationsRoutes);
 app.use("/api/analyses", analysisRoutes)
-
+app.use("/api/profile", profileRoutes)
 
 // Ruta de ejemplo para verificar que el servidor está funcionando
 app.get("/", (req, res) => {

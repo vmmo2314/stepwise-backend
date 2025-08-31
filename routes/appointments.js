@@ -9,6 +9,7 @@ const {
   rejectAppointmentAuto,
   rescheduleAppointmentAuto,
   getAppointmentsByPatient,
+  getClinicaIdByDoctor,
 } = require("../services/appointmentService");
 
 const { authenticateToken } = require("../middleware/authMiddleware") // Importa el middleware
@@ -79,17 +80,46 @@ router.get("/doctor/:doctorId", async (req, res) => {
 router.patch("/:appointmentId/accept", authenticateToken, async (req, res) => {
   try {
     const { appointmentId } = req.params;
-    const { doctorNotes = "", doctorName } = req.body; // << permite recibir el nombre del doctor
+    const { doctorNotes = "", doctorName: bodyDoctorName } = req.body;
     const doctorId = req.user.uid;
 
-    if (!doctorName || typeof doctorName !== "string") {
-      return res.status(400).json({ error: "doctorName es requerido y debe ser string." });
+    // ⇢ Intentar deducir el nombre del doctor si no vino en el body
+    let doctorName = bodyDoctorName || null;
+    try {
+      if (!doctorName) {
+        const { getClinicaIdByDoctor } = require("../services/appointmentService");
+        const clinicaId = await getClinicaIdByDoctor(doctorId);
+        const docSnap = await db
+          .collection("organizaciones")
+          .doc(clinicaId)
+          .collection("doctores")
+          .doc(doctorId)
+          .get();
+
+        if (docSnap.exists) {
+          const d = docSnap.data() || {};
+          doctorName =
+            d.name ||
+            d.displayName ||
+            [d.firstName, d.lastName].filter(Boolean).join(" ") ||
+            null;
+        }
+      }
+    } catch (_) {
+      // no bloqueamos si falla; seguimos sin doctorName
     }
 
-    const data = await acceptAppointmentAuto({ doctorId, appointmentId, doctorNotes, doctorName });
-    res.json(data);
+    // ⇢ Guardar la aceptación (si hay doctorName se persiste)
+    const data = await acceptAppointmentAuto({
+      doctorId,
+      appointmentId,
+      doctorNotes,
+      doctorName,
+    });
+
+    return res.json(data);
   } catch (err) {
-    res.status(400).json({ error: err.message });
+    return res.status(400).json({ error: err.message });
   }
 });
 

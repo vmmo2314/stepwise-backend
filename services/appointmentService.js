@@ -79,13 +79,92 @@ async function updateAppointmentStatusAuto(doctorId, appointmentId, updates) {
   return { id: snap.id, ...snap.data() }
 }
 
-async function acceptAppointmentAuto({ doctorId, appointmentId, doctorNotes = "" }) {
-  return updateAppointmentStatusAuto(doctorId, appointmentId, {
+async function acceptAppointmentAuto({ doctorId, appointmentId, doctorNotes = "", doctorName }) {
+  if (!doctorId) throw new Error("doctorId requerido");
+  if (!appointmentId) throw new Error("appointmentId requerido");
+
+  // 1) Resolvemos clínica y traemos la cita del doctor
+  const clinicaId = await getClinicaIdByDoctor(doctorId);
+  if (!clinicaId) throw new Error("No se pudo resolver clinicaId del doctor");
+
+  const apptRef = doctorAppointmentsColRef(clinicaId, doctorId).doc(appointmentId);
+  const apptSnap = await apptRef.get();
+  if (!apptSnap.exists) throw new Error("Cita no encontrada para este doctor");
+
+  const appt = apptSnap.data() || {};
+
+  // <-- ⚠️ AQUÍ OBTENEMOS EL ID DEL PACIENTE desde la cita
+  //     Ajusta los posibles nombres de campo si en tu documento se llama distinto.
+  const patientId =
+    appt.patientId ||
+    appt.patientUID ||
+    appt.patientUid ||
+    appt.patient?.id ||
+    appt.userId || // fallback por si usaste este nombre
+    null;
+
+  // 2) Campos que se actualizan al aceptar
+  const updates = {
     status: "accepted",
     doctorResponse: doctorNotes,
     processedAt: new Date(),
-  })
+    doctorId,
+    ...(doctorName ? { doctorName } : {}),
+  };
+
+  // 3) Persistimos la aceptación en la cita del doctor
+  await apptRef.set(updates, { merge: true });
+
+  // 4) ⬅️ NUEVO: Vinculamos doctor ↔ paciente en /patients/{patientId}
+  await linkDoctorToPatient({ patientId, doctorId, doctorName });
+
+  // (Opcional) Si también llevas espejo de citas en /organizaciones/.../pacientes/{patientId}/citas/{appointmentId},
+  // podrías actualizarlo aquí igual que hiciste con apptRef.
+
+  // 5) Respuesta estándar
+  return { id: appointmentId, ...appt, ...updates };
 }
+
+async function linkDoctorToPatient({ patientId, doctorId, doctorName }) {
+  if (!patientId) {
+    console.warn("[ACCEPT] No se pudo vincular doctor→paciente: patientId indefinido");
+    return;
+  }
+
+  // Si no vino el nombre, lo resolvemos a partir del doc del doctor
+  let resolvedName = doctorName;
+  try {
+    if (!resolvedName && doctorId) {
+      const clinicaId = await getClinicaIdByDoctor(doctorId);     // ← ya existe en tu servicio
+      const docSnap = await db
+        .collection("organizaciones").doc(clinicaId)
+        .collection("doctores").doc(doctorId)
+        .get();
+
+      if (docSnap.exists) {
+        const d = docSnap.data() || {};
+        resolvedName =
+          d.name ||
+          d.displayName ||
+          [d.firstName, d.lastName].filter(Boolean).join(" ") ||
+          null;
+      }
+    }
+  } catch (e) {
+    console.warn("[ACCEPT] No se pudo resolver doctorName automáticamente:", e.message);
+  }
+
+  // ✅ Escribimos **doctorName** (string) en /patients/{patientId}
+  const patientRef = db.collection("patients").doc(patientId);
+  const payload = {
+    doctorName: resolvedName || "Doctor",
+    doctorUpdatedAt: new Date(), // opcional
+  };
+  await patientRef.set(payload, { merge: true });
+
+  console.log(`[ACCEPT] /patients/${patientId} =>`, payload);
+}
+
 
 async function rejectAppointmentAuto({ doctorId, appointmentId, doctorNotes = "" }) {
   return updateAppointmentStatusAuto(doctorId, appointmentId, {
@@ -199,5 +278,5 @@ module.exports = {
   rejectAppointmentAuto,
   rescheduleAppointmentAuto,
   getAppointmentsByPatient,
-
+  getClinicaIdByDoctor,
 }
