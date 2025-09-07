@@ -99,6 +99,6 @@ module.exports = {
   getAllPatients,
   getAllPatientsByOrg,
   getMyPatients,
-  getPatientById, // 👈 nuevo
+  getPatientById, 
   deletePatient,
 };

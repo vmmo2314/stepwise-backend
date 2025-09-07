@@ -9,8 +9,14 @@ function buildDateIdUTC(dateObj = new Date()) {
   return dateObj.toISOString().replace(/[:.]/g, '_');
 }
 
+/** Devuelve la fecha local CDMX como cadena "dd/mm/aaaa" */
+function buildLastVisitMX(dateObj = new Date()) {
+  return dateObj.toLocaleDateString('es-MX', { timeZone: 'America/Mexico_City' });
+}
+
 /**
  * Crea un análisis en patients/{patientId}/analyses/{analysisId}
+ * Además ACTUALIZA patients/{patientId}.lastVisit con "dd/mm/aaaa".
  * Si no mandas analysisId, se usa la fecha UTC formateada.
  */
 async function createAnalysis(patientId, analysisData = {}) {
@@ -18,8 +24,10 @@ async function createAnalysis(patientId, analysisData = {}) {
     if (!patientId) throw new Error('patientId requerido');
 
     const colRef = db.collection('patients').doc(patientId).collection('analyses');
+    const patientRef = db.collection('patients').doc(patientId);
 
     // Doc a guardar
+    const now = new Date();
     const payload = {
       ...analysisData,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -27,7 +35,7 @@ async function createAnalysis(patientId, analysisData = {}) {
     };
 
     // Usa el que venga o genera basado en la fecha
-    let desiredId = analysisData?.id || analysisData?.analysisId || buildDateIdUTC();
+    let desiredId = analysisData?.id || analysisData?.analysisId || buildDateIdUTC(now);
 
     // Evita colisión en el improbable caso de mismo ms
     let docRef = colRef.doc(desiredId);
@@ -37,7 +45,23 @@ async function createAnalysis(patientId, analysisData = {}) {
       docRef = colRef.doc(desiredId);
     }
 
-    await docRef.set(payload);
+    // Construye la cadena requerida para lastVisit (dd/mm/aaaa)
+    const lastVisitStr = buildLastVisitMX(now);
+
+    // Escribe en un batch para que sea atómico
+    const batch = db.batch();
+    batch.set(docRef, payload);
+    batch.set(
+      patientRef,
+      {
+        lastVisit: lastVisitStr, // 👈 campo plano como cadena
+        // Opcional: si quieres guardar también un timestamp de servidor:
+        // lastVisitAt: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+
+    await batch.commit();
 
     return { id: docRef.id, analysisId: docRef.id, ...payload };
   } catch (err) {
